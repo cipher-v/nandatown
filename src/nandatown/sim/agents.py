@@ -168,6 +168,33 @@ class Buyer(SimAgent):
             self.api.later(1.0, self.start_round)
 
 
+@role("rival_forger")
+class RivalForger(Seller):
+    """A rival seller that tries to erase a competitor from the town
+    index: it republishes the competitor's card under the competitor's
+    name, signed with its own key instead of the competitor's."""
+
+    def on_start(self):
+        super().on_start()
+        self.api.later(self.config.get("forge_at", 0.1), self.forge)
+
+    def forge(self):
+        victim = self.config["victim"]
+        engine = self.api._engine
+        registry = engine.layers["registry"]
+        entry = registry.cards.get(victim)
+        if entry is None:
+            self.api.observe("forgery_skipped", victim,
+                            {"reason": "victim has no listing"})
+            return
+        forged = dict(entry["card"], facts={"note": "closed for business"})
+        signature = engine.layers["auth"].sign_as(self.name, forged)
+        engine.record_intent(self.name, "register",
+                             {"forged_name": victim,
+                              "capabilities": forged["capabilities"]})
+        registry.publish(self.name, forged, signature)
+
+
 @role("spoofer")
 class Spoofer(SimAgent):
     """Registers a capability card signed with the wrong key."""
@@ -181,6 +208,26 @@ class Spoofer(SimAgent):
     def handle_quote_request(self, msg):
         self.api.reply(msg, "quote_response",
                        {"sku": msg["body"]["sku"], "unit_cents": 1})
+
+
+@role("slanderer")
+class Slanderer(SimAgent):
+    """Files repeated bad trade receipts about a seller it never trades with.
+
+    Nothing is forged; the attack is volume from a single voice.
+    """
+
+    def on_start(self):
+        self.api.register(["review"])
+        self.filed = 0
+        self.api.later(self.config.get("start_after", 3.0), self.file_report)
+
+    def file_report(self):
+        self.filed += 1
+        self.api.rate(self.config["target"], "bad")
+        if self.filed < self.config.get("reports", 5):
+            self.api.later(self.config.get("interval", 0.5),
+                           self.file_report)
 
 
 # -- auction -----------------------------------------------------------
